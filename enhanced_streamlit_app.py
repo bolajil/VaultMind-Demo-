@@ -630,7 +630,7 @@ def render_search_page():
         index_name = st.text_input("Index Name (optional)", help="Leave blank to search all indexes")
         top_k = st.slider("Maximum Results", min_value=1, max_value=20, value=5, step=1)
         relevance_threshold = st.slider("Relevance Threshold", min_value=0.0, max_value=1.0, value=0.6, step=0.05)
-        provider = st.selectbox("LLM Provider", ["openai", "claude", "deepseek"])
+        provider = st.selectbox("LLM Provider", ["openai", "deepseek", "groq"])
     
     # Submit search
     if query and st.button("Search"):
