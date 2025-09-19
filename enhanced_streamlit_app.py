@@ -346,6 +346,17 @@ def query_knowledge_base(query, index_name=None, top_k=5, relevance_threshold=0.
                 "relevance": rel,
                 "metadata": r.get("metadata", {}),
             })
+        # Fallback: if threshold filtered out all results, return the top result anyway
+        if not formatted and results:
+            r0 = results[0]
+            score0 = float(r0.get("confidence_score", 0.0))
+            rel0 = max(0.0, min(1.0, (score0 + 1.0) / 2.0))
+            formatted.append({
+                "content": r0.get("content", ""),
+                "source": r0.get("source", "Unknown"),
+                "relevance": rel0,
+                "metadata": r0.get("metadata", {}),
+            })
         result_payload: Dict[str, Any] = {"status": "success", "result_count": len(formatted), "results": formatted}
         # Optional LLM synthesis when keys are present
         try:
@@ -629,7 +640,7 @@ def render_search_page():
     with st.expander("Search Settings", expanded=False):
         index_name = st.text_input("Index Name (optional)", help="Leave blank to search all indexes")
         top_k = st.slider("Maximum Results", min_value=1, max_value=20, value=5, step=1)
-        relevance_threshold = st.slider("Relevance Threshold", min_value=0.0, max_value=1.0, value=0.6, step=0.05)
+        relevance_threshold = st.slider("Relevance Threshold", min_value=0.0, max_value=1.0, value=0.4, step=0.05)
         provider = st.selectbox("LLM Provider", ["openai", "deepseek", "groq"])
     
     # Submit search
@@ -934,8 +945,8 @@ def render_search_document_page():
     # Search settings
     with st.expander("Search Settings", expanded=False):
         top_k = st.slider("Maximum Results", min_value=1, max_value=20, value=5, step=1)
-        relevance_threshold = st.slider("Relevance Threshold", min_value=0.0, max_value=1.0, value=0.6, step=0.05)
-        provider = st.selectbox("LLM Provider", ["openai", "claude", "deepseek"])
+        relevance_threshold = st.slider("Relevance Threshold", min_value=0.0, max_value=1.0, value=0.4, step=0.05)
+        provider = st.selectbox("LLM Provider", ["openai", "deepseek", "groq"])
     
     # Submit search
     if query and st.button("Search"):
