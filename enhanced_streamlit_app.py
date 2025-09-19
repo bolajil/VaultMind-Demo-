@@ -18,10 +18,98 @@ from typing import Dict, List, Any, Optional, Union
 import io
 from utils.demo_mode import ensure_demo_index
 from utils.vector_search_with_embeddings import search_with_embeddings, get_vector_search_engine
+from dotenv import load_dotenv
+
+# Load environment variables from project root .env (if present)
+try:
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+except Exception:
+    pass
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Helper to read secrets from Streamlit or environment
+def _get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
+    try:
+        if hasattr(st, "secrets") and name in st.secrets:
+            return st.secrets.get(name)
+    except Exception:
+        pass
+    return os.environ.get(name, default)
+
+# LLM configuration and availability
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.1-70b-versatile")
+
+def _llm_availability() -> Dict[str, bool]:
+    return {
+        "openai": bool(_get_secret("OPENAI_API_KEY")),
+        "deepseek": bool(_get_secret("DEEPSEEK_API_KEY")),
+        "groq": bool(_get_secret("GROQ_API_KEY")),
+    }
+
+def _any_llm_available() -> bool:
+    return any(_llm_availability().values())
+
+def _chat_openai_compatible(base_url: str, api_key: str, model: str, messages: List[Dict[str, str]], temperature: float = 0.2) -> Optional[str]:
+    try:
+        url = base_url.rstrip("/") + "/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("choices", [{}])[0].get("message", {}).get("content")
+    except Exception as e:
+        logger.error(f"LLM request failed: {e}")
+        return None
+
+def _synthesize_answer(query: str, results: List[Dict[str, Any]], provider: str) -> Optional[str]:
+    if not results:
+        return None
+    provider = (provider or "openai").lower()
+    avail = _llm_availability()
+
+    # Prepare messages with top results as context
+    context_lines = []
+    max_ctx = 5
+    for i, r in enumerate(results[:max_ctx]):
+        src = r.get("source", f"doc_{i+1}")
+        content = r.get("content", "")[:800]
+        context_lines.append(f"Source {i+1}: {src}\nContent: {content}")
+    context_block = "\n\n".join(context_lines)
+
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant that answers strictly based on the provided sources. Include brief citations like [Source 1], [Source 2]."},
+        {"role": "user", "content": f"Question: {query}\n\nSources:\n{context_block}\n\nAnswer succinctly with bullet points and cite sources."},
+    ]
+
+    # Route to available provider
+    if provider == "openai" and avail.get("openai"):
+        return _chat_openai_compatible("https://api.openai.com/v1", _get_secret("OPENAI_API_KEY"), OPENAI_MODEL, messages)
+    if provider == "deepseek" and avail.get("deepseek"):
+        return _chat_openai_compatible("https://api.deepseek.com/v1", _get_secret("DEEPSEEK_API_KEY"), DEEPSEEK_MODEL, messages)
+    if provider == "groq" and avail.get("groq"):
+        return _chat_openai_compatible("https://api.groq.com/openai/v1", _get_secret("GROQ_API_KEY"), GROQ_MODEL, messages)
+
+    # Fallback to any available provider
+    if avail.get("openai"):
+        return _chat_openai_compatible("https://api.openai.com/v1", _get_secret("OPENAI_API_KEY"), OPENAI_MODEL, messages)
+    if avail.get("deepseek"):
+        return _chat_openai_compatible("https://api.deepseek.com/v1", _get_secret("DEEPSEEK_API_KEY"), DEEPSEEK_MODEL, messages)
+    if avail.get("groq"):
+        return _chat_openai_compatible("https://api.groq.com/openai/v1", _get_secret("GROQ_API_KEY"), GROQ_MODEL, messages)
+    return None
 
 # Configuration
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
@@ -140,12 +228,15 @@ def error_box(text):
 # Function to get system status
 def get_system_status():
     if DEMO_MODE:
+        llm_avail = _llm_availability()
+        enabled = any(llm_avail.values())
+        providers = ", ".join([p for p, ok in llm_avail.items() if ok]) or "none"
         return {
             "status": "healthy",
             "message": "Demo Mode",
             "components": {
                 "vector_database": {"status": "ready", "available": True, "details": f"FAISS demo index: {DEMO_INDEX_NAME}"},
-                "llm_service": {"status": "disabled", "available": False}
+                "llm_service": {"status": "ready" if enabled else "disabled", "available": enabled, "details": f"providers: {providers}"}
             }
         }
     try:
@@ -255,7 +346,16 @@ def query_knowledge_base(query, index_name=None, top_k=5, relevance_threshold=0.
                 "relevance": rel,
                 "metadata": r.get("metadata", {}),
             })
-        return {"status": "success", "result_count": len(formatted), "results": formatted}
+        result_payload: Dict[str, Any] = {"status": "success", "result_count": len(formatted), "results": formatted}
+        # Optional LLM synthesis when keys are present
+        try:
+            if _any_llm_available() and formatted:
+                answer = _synthesize_answer(query, formatted, provider)
+                if answer:
+                    result_payload["answer"] = answer
+        except Exception as e:
+            logger.error(f"Demo Mode LLM synthesis failed: {e}")
+        return result_payload
     try:
         # Prepare the request payload
         payload = {
