@@ -927,13 +927,16 @@ def main():
             
             # Display vector database status
             vector_db = system_status.get("components", {}).get("vector_database", {})
-            if vector_db.get("available"):
-                if vector_db.get("status") == "Ready":
-                    st.info(f"Vector DB: {vector_db.get('message', 'Ready')}")
+            if vector_db:
+                status_str = str(vector_db.get("status", "")).lower()
+                details = vector_db.get("details") or vector_db.get("message") or ""
+                if vector_db.get("available"):
+                    if status_str == "ready":
+                        st.success("Vector DB: Ready" + (f" - {details}" if details else ""))
+                    else:
+                        st.warning(f"Vector DB: {vector_db.get('status', 'Not Ready')}" + (f" - {details}" if details else ""))
                 else:
-                    st.warning(f"Vector DB: {vector_db.get('message', 'Not Ready')}")
-            else:
-                st.warning("Vector DB: Unavailable")
+                    st.warning("Vector DB: Unavailable")
     
     # Render the appropriate page based on session state
     if st.session_state.page == "home":
