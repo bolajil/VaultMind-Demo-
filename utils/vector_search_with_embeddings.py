@@ -35,8 +35,21 @@ class VectorSearchEngine:
     def _initialize_model(self):
         """Initialize the embedding model"""
         try:
-            self.model = SentenceTransformer(self.model_name)
-            logger.info(f"Initialized embedding model: {self.model_name}")
+            # Prefer a local model directory if available to avoid network fetch
+            base_dir = Path(__file__).resolve().parents[1]
+            local_dir_candidates = [
+                base_dir / "models" / self.model_name,
+                base_dir / "models" / "all-MiniLM-L6-v2",
+                base_dir / "models" / "all-minLM-L6-v2",  # tolerate casing variant
+            ]
+            for p in local_dir_candidates:
+                if p.exists():
+                    self.model = SentenceTransformer(str(p))
+                    logger.info(f"Initialized embedding model from local path: {p}")
+                    break
+            if self.model is None:
+                self.model = SentenceTransformer(self.model_name)
+                logger.info(f"Initialized embedding model: {self.model_name}")
         except Exception as e:
             logger.error(f"Failed to initialize embedding model: {e}")
             raise
@@ -96,10 +109,11 @@ class VectorSearchEngine:
         try:
             # Check if index is loaded
             if index_name not in self.loaded_indexes:
-                # Try to find and load the index
+                # Try to find and load the index under the demo project root
+                base_dir = Path(__file__).resolve().parents[1]
                 index_paths = [
-                    Path(__file__).parent.parent / "data" / "indexes" / index_name,
-                    Path(__file__).parent.parent / "data" / "faiss_index" / index_name
+                    base_dir / "data" / "indexes" / index_name,
+                    base_dir / "data" / "faiss_index" / index_name
                 ]
                 
                 loaded = False
@@ -233,10 +247,11 @@ def validate_embeddings_available(index_name: str) -> Tuple[bool, str]:
     Returns:
         Tuple of (available, message)
     """
-    # Check common index locations
+    # Check common index locations under the demo project root
+    base_dir = Path(__file__).resolve().parents[1]
     index_paths = [
-        Path(__file__).parent.parent / "data" / "indexes" / index_name,
-        Path(__file__).parent.parent / "data" / "faiss_index" / index_name
+        base_dir / "data" / "indexes" / index_name,
+        base_dir / "data" / "faiss_index" / index_name
     ]
     
     for path in index_paths:

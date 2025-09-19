@@ -16,8 +16,13 @@ import requests
 import base64
 from typing import Dict, List, Any, Optional, Union
 import io
+import shutil
 from utils.demo_mode import ensure_demo_index
-from utils.vector_search_with_embeddings import search_with_embeddings, get_vector_search_engine
+from utils.vector_search_with_embeddings import (
+    search_with_embeddings,
+    get_vector_search_engine,
+    validate_embeddings_available,
+)
 from dotenv import load_dotenv
 
 # Load environment variables from project root .env (if present)
@@ -742,6 +747,57 @@ def render_search_results_page():
                 st.markdown(result.get("content", "No content available"))
     else:
         st.warning("No relevant documents found")
+        # Demo Mode debug panel to help diagnose empty results
+        if DEMO_MODE:
+            with st.expander("Debug: Raw results and index status (Demo Mode)", expanded=False):
+                try:
+                    idx = DEMO_INDEX_NAME
+                    ok, msg = validate_embeddings_available(idx)
+                    st.write(f"Embeddings available: {ok} ({msg})")
+                    if DEMO_INDEX_PATH:
+                        st.write(f"Index path: {DEMO_INDEX_PATH}")
+                        st.write({
+                            "faiss_exists": (DEMO_INDEX_PATH / "index.faiss").exists(),
+                            "pkl_exists": (DEMO_INDEX_PATH / "index.pkl").exists(),
+                            "source_exists": (DEMO_INDEX_PATH / "demo_source.txt").exists(),
+                        })
+                        # Offer to rebuild the demo index if files look missing/corrupted
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            if st.button("Rebuild Demo Index"):
+                                try:
+                                    if DEMO_INDEX_PATH.exists():
+                                        shutil.rmtree(DEMO_INDEX_PATH, ignore_errors=True)
+                                    created, msg2, _ = ensure_demo_index(DEMO_INDEX_NAME)
+                                    st.success(f"Rebuild result: {msg2}")
+                                    st.info("Reloading app to use the freshly built index...")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Rebuild failed: {e}")
+                        try:
+                            eng = get_vector_search_engine()
+                            # Attempt to ensure the engine has this index loaded
+                            try:
+                                eng.load_index(DEMO_INDEX_PATH)
+                            except Exception:
+                                pass
+                            info = eng.get_index_info(idx)
+                            st.write("Index info:", info)
+                        except Exception as e:
+                            st.write(f"Index info error: {e}")
+                    # Show raw vector matches (without filtering)
+                    raw = search_with_embeddings(st.session_state.last_query, idx, top_k=5)
+                    st.write(f"Raw matches: {len(raw)}")
+                    for i, r in enumerate(raw):
+                        st.write({
+                            "i": i + 1,
+                            "score": float(r.get("confidence_score", 0.0)),
+                            "source": r.get("source"),
+                            "snippet": (r.get("content", "")[:200] + ("..." if len(r.get("content", "")) > 200 else "")),
+                        })
+                except Exception as e:
+                    st.write(f"Debug panel error: {e}")
+            st.info("Tip: Lower the Relevance Threshold to 0.2–0.4 and retry. The app also falls back to the top match in Demo Mode.")
     
     # Feedback section
     st.markdown("---")
@@ -1048,6 +1104,16 @@ def main():
                         st.warning(f"Vector DB: {vector_db.get('status', 'Not Ready')}" + (f" - {details}" if details else ""))
                 else:
                     st.warning("Vector DB: Unavailable")
+
+            # Display LLM service status (if present)
+            llm_service = system_status.get("components", {}).get("llm_service", {})
+            if llm_service:
+                llm_status = str(llm_service.get("status", "")).lower()
+                llm_details = llm_service.get("details") or llm_service.get("message") or ""
+                if llm_service.get("available") and llm_status == "ready":
+                    st.success("LLM Service: Ready" + (f" – {llm_details}" if llm_details else ""))
+                else:
+                    st.info("LLM Service: Disabled" + (f" – {llm_details}" if llm_details else ""))
     
     # Render the appropriate page based on session state
     if st.session_state.page == "home":
